@@ -1,6 +1,6 @@
 # vim-lisp
 
-> Common Lisp dev environment for vim and neovim
+> Common Lisp dev environment for [SpaceVim](https://spacevim.org/layers/lang/lisp/)
 
 # Dependencies
 
@@ -17,8 +17,7 @@ recommands:
 # Supported CL Implementations
 
 The CL implementations listed below are supported. If you tried out Vlime with
-an implementation not listed here, please let me know (see the Contributing
-section below for contact info).
+an implementation not listed here, please let me know.
 
 ```
 Implementation  Version  Notes
@@ -31,6 +30,3 @@ CCL             1.11
 SBCL            1.3.13
 LispWorks       6.1      Tested with the Personal Edition
 ```
-
-# Quickstart
-
