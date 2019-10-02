@@ -9,7 +9,7 @@
 (in-package #:vlime-protocol-test)
 
 
-(plan 27)
+(plan 28)
 
 (ok
   (equal (parse-form "(simple form)")
@@ -23,12 +23,12 @@
 
 (ok
   (equal (write-form '(simple form))
-         "(VLIME-PROTOCOL-TEST::SIMPLE VLIME-PROTOCOL-TEST::FORM)")
+         "(vlime-protocol-test::simple vlime-protocol-test::form)")
   "write-form - simple form")
 
 (ok
   (equal (write-form '(vlime-protocol-test::qualified vlime-protocol-test::form))
-         "(VLIME-PROTOCOL-TEST::QUALIFIED VLIME-PROTOCOL-TEST::FORM)")
+         "(vlime-protocol-test::qualified vlime-protocol-test::form)")
   "write-form - qualified symbols")
 
 (let ((json (form-to-json '(simple form))))
@@ -102,8 +102,15 @@
                                     [{\"name\":\"CONNECTION-INFO\", \"package\":\"SWANK\"}],
                                     null, true]]"
                               :string)
-         "00002C(:EMACS-REX (SWANK:CONNECTION-INFO) NIL T 1)")
+         "00002C(:emacs-rex (swank:connection-info) nil t 1)")
   "msg-client-to-swank - simple message")
+
+(ok
+  (equal (msg-client-to-swank "[1, [{\"name\":\"VLIME-RAW-MSG\", \"package\":\"KEYWORD\"},
+                                    \"This-is-a-raw-message\"]]"
+                              :string)
+         "000015This-is-a-raw-message")
+  "msg-client-to-swank - raw message")
 
 (let ((msg (msg-swank-to-client "(:return (:ok 42) 1)" :string))
       (cr-lf (format nil "~c~c" #\return #\linefeed)))

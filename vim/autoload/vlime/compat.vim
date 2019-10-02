@@ -35,10 +35,11 @@ function! vlime#compat#ch_type()
     return s:ch_impl.ch_type()
 endfunction
 
-" vlime#compat#ch_open(host, port[, callback])
+" vlime#compat#ch_open(host, port[, callback[, timeout]])
 function! vlime#compat#ch_open(host, port, ...)
-    let Callback = vlime#GetNthVarArg(a:000, 0, v:null)
-    return s:ch_impl.ch_open(a:host, a:port, Callback)
+    let Callback = get(a:000, 0, v:null)
+    let timeout = get(a:000, 1, v:null)
+    return s:ch_impl.ch_open(a:host, a:port, Callback, timeout)
 endfunction
 
 function! vlime#compat#ch_status(chan)
@@ -59,7 +60,7 @@ endfunction
 
 " vlime#compat#ch_sendexpr(chan, expr[, callback])
 function! vlime#compat#ch_sendexpr(chan, expr, ...)
-    let Callback = vlime#GetNthVarArg(a:000, 0, v:null)
+    let Callback = get(a:000, 0, v:null)
     return s:ch_impl.ch_sendexpr(a:chan, a:expr, Callback)
 endfunction
 

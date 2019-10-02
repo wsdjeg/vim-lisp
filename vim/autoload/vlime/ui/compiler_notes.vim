@@ -52,7 +52,7 @@ endfunction
 
 " vlime#ui#compiler_notes#OpenCurNote([edit_cmd])
 function! vlime#ui#compiler_notes#OpenCurNote(...)
-    let edit_cmd = vlime#GetNthVarArg(a:000, 0, 'hide edit')
+    let edit_cmd = get(a:000, 0, 'hide edit')
 
     let cur_pos = getcurpos()
     let note_coord = v:null
@@ -67,10 +67,15 @@ function! vlime#ui#compiler_notes#OpenCurNote(...)
         return
     endif
 
-    let note_loc = vlime#ParseSourceLocation(
-                \ b:vlime_compiler_note_list[note_coord['id']]['LOCATION'])
-    let valid_loc = vlime#GetValidSourceLocation(note_loc)
-    if len(valid_loc) > 0
+    let raw_note_loc = b:vlime_compiler_note_list[note_coord['id']]['LOCATION']
+    try
+        let note_loc = vlime#ParseSourceLocation(raw_note_loc)
+        let valid_loc = vlime#GetValidSourceLocation(note_loc)
+    catch
+        let valid_loc = []
+    endtry
+
+    if len(valid_loc) > 0 && type(valid_loc[1]) != type(v:null)
         let orig_win = getbufvar('%', 'vlime_notes_orig_win', v:null)
         let [win_to_go, count_specified] = vlime#ui#ChooseWindowWithCount(orig_win)
         if win_to_go > 0
@@ -78,7 +83,9 @@ function! vlime#ui#compiler_notes#OpenCurNote(...)
         elseif count_specified
             return
         endif
-        call vlime#ui#JumpToOrOpenFile(valid_loc[0], valid_loc[1], edit_cmd, count_specified)
+        call vlime#ui#ShowSource(b:vlime_conn, valid_loc, edit_cmd, count_specified)
+    elseif type(raw_note_loc) != type(v:null) && raw_note_loc[0]['name'] == 'ERROR'
+        call vlime#ui#ErrMsg(raw_note_loc[1])
     else
         call vlime#ui#ErrMsg('No source available.')
     endif

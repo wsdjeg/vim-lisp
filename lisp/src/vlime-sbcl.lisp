@@ -31,12 +31,14 @@
       (vom:debug "Socket event: ~a" condition))))
 
 
-(defun client-connect-cb (afd)
+(defun client-connect-cb (afd dont-close)
   (unless (lookup-connection afd)
     (make-connection :socket afd)
     (vom:info "New connection from ~s" afd)
     (vom:debug "Connection count: ~s" (count-connections)))
-  (aio-fd-disable-write-handle afd :clear-cb t))
+  (aio-fd-disable-write-handle afd :clear-cb t)
+  (unless dont-close
+    (aio-fd-close (aio-fd-parent afd))))
 
 
 (defun swank-read-cb (afd data)
@@ -76,12 +78,16 @@
 
 (in-package #:vlime)
 
-(defmethod start-server ((backend (eql :sbcl)) host port swank-host swank-port)
+(defmethod start-server ((backend (eql :sbcl)) host port swank-host swank-port dont-close)
   (vom:config t :info)
-  (setf vlime-connection:*connections* (make-hash-table))
-  (setf aio-sbcl:*fd-map* (make-hash-table))
-  (setf aio-sbcl:*static-buffer* (make-array 4096 :element-type '(unsigned-byte 8)))
-  (setf vlime-sbcl::*read-buffer-map* (make-hash-table))
+  (unless vlime-connection:*connections*
+    (setf vlime-connection:*connections* (make-hash-table)))
+  (unless aio-sbcl:*fd-map*
+    (setf aio-sbcl:*fd-map* (make-hash-table)))
+  (unless aio-sbcl:*static-buffer*
+    (setf aio-sbcl:*static-buffer* (make-array 4096 :element-type '(unsigned-byte 8))))
+  (unless vlime-sbcl::*read-buffer-map*
+    (setf vlime-sbcl::*read-buffer-map* (make-hash-table)))
 
   (let* ((server (aio-sbcl:tcp-server
                    host port
@@ -89,7 +95,8 @@
                                        (vlime-sbcl::client-read-cb
                                          afd data
                                          swank-host swank-port))
-                   :client-write-cb #'vlime-sbcl::client-connect-cb
+                   :client-write-cb #'(lambda (afd)
+                                        (vlime-sbcl::client-connect-cb afd dont-close))
                    :client-error-cb #'vlime-sbcl::socket-error-cb))
          (local-name (multiple-value-list
                        (sb-bsd-sockets:socket-name

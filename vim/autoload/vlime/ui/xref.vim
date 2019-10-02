@@ -53,8 +53,8 @@ endfunction
 
 " vlime#ui#xref#OpenCurXref([close_xref[, edit_cmd]])
 function! vlime#ui#xref#OpenCurXref(...)
-    let close_xref = vlime#GetNthVarArg(a:000, 0, v:true)
-    let edit_cmd = vlime#GetNthVarArg(a:000, 1, 'hide edit')
+    let close_xref = get(a:000, 0, v:true)
+    let edit_cmd = get(a:000, 1, 'hide edit')
 
     let cur_pos = getcurpos()
     let xref_coord = v:null
@@ -77,7 +77,7 @@ function! vlime#ui#xref#OpenCurXref(...)
         let valid_loc = []
     endtry
 
-    if len(valid_loc) > 0
+    if len(valid_loc) > 0 && type(valid_loc[1]) != type(v:null)
         if type(valid_loc[0]) == v:t_string && valid_loc[0][0:6] != 'sftp://'
                     \ && !filereadable(valid_loc[0])
             call vlime#ui#ErrMsg('Not readable: ' . valid_loc[0])
@@ -98,8 +98,8 @@ function! vlime#ui#xref#OpenCurXref(...)
             execute win_id2win(xref_win_id) . 'wincmd c'
         endif
 
-        call vlime#ui#JumpToOrOpenFile(valid_loc[0], valid_loc[1], edit_cmd, count_specified)
-    elseif raw_xref_loc[0]['name'] == 'ERROR'
+        call vlime#ui#ShowSource(b:vlime_conn, valid_loc, edit_cmd, count_specified)
+    elseif type(raw_xref_loc) != type(v:null) && raw_xref_loc[0]['name'] == 'ERROR'
         call vlime#ui#ErrMsg(raw_xref_loc[1])
     else
         call vlime#ui#ErrMsg('No source available.')

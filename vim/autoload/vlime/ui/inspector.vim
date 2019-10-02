@@ -57,6 +57,23 @@ function! vlime#ui#inspector#FillInspectorBuf(content, thread, itag)
     setlocal nomodifiable
 
     let b:vlime_inspector_coords = coords
+    if exists('b:vlime_inspector_coords_match')
+        call vlime#ui#MatchDeleteList(b:vlime_inspector_coords_match)
+    endif
+
+    let action_coords = []
+    let value_coords = []
+    for co in coords
+        if co['type'] == 'VALUE'
+            call add(value_coords, co)
+        else
+            call add(action_coords, co)
+        endif
+    endfor
+
+    let b:vlime_inspector_coords_match =
+                \ vlime#ui#MatchAddCoords('vlime_inspectorAction', action_coords) +
+                \ vlime#ui#MatchAddCoords('vlime_inspectorValue', value_coords)
 
     augroup VlimeInspectorLeaveAu
         autocmd!
@@ -98,24 +115,27 @@ function! vlime#ui#inspector#FillInspectorBufContent(content, coords)
 endfunction
 
 function! vlime#ui#inspector#ResetInspectorBuffer(bufnr)
+    " Clear the content instead of unloading the buffer, to preserve the
+    " syntax highlighting settings
     call setbufvar(a:bufnr, 'vlime_inspector_coords', [])
+    let coords_match = getbufvar(a:bufnr, 'vlime_inspector_coords_match', [])
+    call setbufvar(a:bufnr, 'vlime_inspector_coords_match', [])
+    call setbufvar(a:bufnr, '&modifiable', 1)
+    call vlime#ui#WithBuffer(a:bufnr,
+                \ {->
+                    \ vlime#ui#ReplaceContent('') &&
+                    \ vlime#ui#MatchDeleteList(coords_match)})
+    call setbufvar(a:bufnr, '&modifiable', 0)
+
     " This function is called in an autocmd in this particular augroup we are
     " clearing, but it seemed okay to do so.
     augroup VlimeInspectorLeaveAu
         autocmd!
     augroup end
-    execute 'bunload! ' . a:bufnr
 endfunction
 
 function! vlime#ui#inspector#InspectorSelect()
-    let cur_pos = getcurpos()
-    let coord = v:null
-    for c in b:vlime_inspector_coords
-        if vlime#ui#MatchCoord(c, cur_pos[1], cur_pos[2])
-            let coord = c
-            break
-        endif
-    endfor
+    let coord = s:GetCurCoord()
 
     if type(coord) == type(v:null)
         return
@@ -155,6 +175,51 @@ function! vlime#ui#inspector#InspectorSelect()
     endif
 endfunction
 
+function! vlime#ui#inspector#SendCurValueToREPL()
+    let coord = s:GetCurCoord()
+
+    if type(coord) == type(v:null) || coord['type'] != 'VALUE'
+        return
+    endif
+
+    call b:vlime_conn.ui.OnWriteString(b:vlime_conn,
+                \ "--\n", {'name': 'REPL-SEP', 'package': 'KEYWORD'})
+    call b:vlime_conn.WithThread({'name': 'REPL-THREAD', 'package': 'KEYWORD'},
+                \ function(b:vlime_conn.ListenerEval,
+                    \ ['(nth-value 0 (swank:inspector-nth-part ' . coord['id'] . '))']))
+endfunction
+
+function! vlime#ui#inspector#SendCurInspecteeToREPL()
+    call b:vlime_conn.ui.OnWriteString(b:vlime_conn,
+                \ "--\n", {'name': 'REPL-SEP', 'package': 'KEYWORD'})
+    call b:vlime_conn.WithThread({'name': 'REPL-THREAD', 'package': 'KEYWORD'},
+                \ function(b:vlime_conn.ListenerEval,
+                    \ ['(swank::istate.object swank::*istate*)']))
+endfunction
+
+" vlime#ui#inspector#FindSource(type[, edit_cmd])
+function! vlime#ui#inspector#FindSource(type, ...)
+    let edit_cmd = get(a:000, 0, 'hide edit')
+
+    if a:type == 'inspectee'
+        let id = 0
+    elseif a:type == 'part'
+        let coord = s:GetCurCoord()
+        if type(coord) == type(v:null) || coord['type'] != 'VALUE'
+            return
+        endif
+        let id = coord['id']
+    endif
+
+    let [win_to_go, count_specified] = vlime#ui#ChooseWindowWithCount(v:null)
+    if win_to_go <= 0 && count_specified
+        return
+    endif
+
+    call b:vlime_conn.FindSourceLocationForEmacs(['INSPECTOR', id],
+                \ function('s:FindSourceCB', [edit_cmd, win_to_go, count_specified]))
+endfunction
+
 function! vlime#ui#inspector#NextField(forward)
     if len(b:vlime_inspector_coords) <= 0
         return
@@ -162,28 +227,9 @@ function! vlime#ui#inspector#NextField(forward)
 
     let cur_pos = getcurpos()
     let sorted_coords = sort(copy(b:vlime_inspector_coords),
-                \ function('s:CoordSorter', [a:forward]))
-    let next_coord = v:null
-    for c in sorted_coords
-        if a:forward
-            if c['begin'][0] > cur_pos[1]
-                let next_coord = c
-                break
-            elseif c['begin'][0] == cur_pos[1] && c['begin'][1] > cur_pos[2]
-                let next_coord = c
-                break
-            endif
-        else
-            if c['begin'][0] < cur_pos[1]
-                let next_coord = c
-                break
-            elseif c['begin'][0] == cur_pos[1] && c['begin'][1] < cur_pos[2]
-                let next_coord = c
-                break
-            endif
-        endif
-    endfor
-
+                \ function('vlime#ui#CoordSorter', [a:forward]))
+    let next_coord = vlime#ui#FindNextCoord(
+                \ cur_pos[1:2], sorted_coords, a:forward)
     if type(next_coord) == type(v:null)
         let next_coord = sorted_coords[0]
     endif
@@ -194,12 +240,16 @@ function! vlime#ui#inspector#NextField(forward)
 endfunction
 
 function! vlime#ui#inspector#InspectorPop()
-    call b:vlime_conn.InspectorPop(function('s:OnInspectorPopComplete'))
+    call b:vlime_conn.InspectorPop(function('s:OnInspectorPopComplete', ['previous']))
 endfunction
 
-function! s:OnInspectorPopComplete(conn, result)
+function! vlime#ui#inspector#InspectorNext()
+    call b:vlime_conn.InspectorNext(function('s:OnInspectorPopComplete', ['next']))
+endfunction
+
+function! s:OnInspectorPopComplete(which, conn, result)
     if type(a:result) == type(v:null)
-        call vlime#ui#ErrMsg('The inspector stack is empty.')
+        call vlime#ui#ErrMsg('No ' . a:which . ' object.')
     else
         call a:conn.ui.OnInspect(a:conn, a:result, v:null, v:null)
     endif
@@ -223,22 +273,42 @@ function! s:InspectorFetchAllCB(acc, conn, result)
     endif
 endfunction
 
-function! s:CoordSorter(direction, c1, c2)
-    if a:c1['begin'][0] > a:c2['begin'][0]
-        return a:direction ? 1 : -1
-    elseif a:c1['begin'][0] == a:c2['begin'][0]
-        if a:c1['begin'][1] > a:c2['begin'][1]
-            return a:direction ? 1 : -1
-        elseif a:c1['begin'][1] == a:c2['begin'][1]
-            return 0
-        else
-            return a:direction ? -1 : 1
+function! s:FindSourceCB(edit_cmd, win_to_go, force_open, conn, msg)
+    try
+        let loc = vlime#ParseSourceLocation(a:msg)
+        let valid_loc = vlime#GetValidSourceLocation(loc)
+    catch
+        let valid_loc = []
+    endtry
+
+    if len(valid_loc) > 0 && type(valid_loc[1]) != type(v:null)
+        if a:win_to_go > 0
+            if win_id2win(a:win_to_go) <= 0
+                return
+            endif
+            call win_gotoid(a:win_to_go)
         endif
+
+        call vlime#ui#ShowSource(a:conn, valid_loc, a:edit_cmd, a:force_open)
+    elseif type(a:msg) != type(v:null) && a:msg[0]['name'] == 'ERROR'
+        call vlime#ui#ErrMsg(a:msg[1])
     else
-        return a:direction ? -1 : 1
+        call vlime#ui#ErrMsg('No source available.')
     endif
 endfunction
 
 function! s:InitInspectorBuf()
     call vlime#ui#MapBufferKeys('inspector')
+endfunction
+
+function! s:GetCurCoord()
+    let cur_pos = getcurpos()
+    let coord = v:null
+    for c in b:vlime_inspector_coords
+        if vlime#ui#MatchCoord(c, cur_pos[1], cur_pos[2])
+            let coord = c
+            break
+        endif
+    endfor
+    return coord
 endfunction

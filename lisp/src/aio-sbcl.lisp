@@ -15,6 +15,7 @@
            #:aio-fd
            #:aio-fd-fd
            #:aio-fd-socket
+           #:aio-fd-parent
            #:aio-fd-write-buffer
            #:aio-fd-read-handle
            #:aio-fd-write-handle
@@ -63,6 +64,10 @@
      :initarg :socket
      :initform nil
      :accessor aio-fd-socket)
+   (parent
+     :initarg :parent
+     :initform nil
+     :accessor aio-fd-parent)
    (write-buffer
      :initarg :write-buffer
      :initform nil
@@ -164,13 +169,12 @@
     (setf (non-blocking-mode socket) t)
     (handler-case
       (socket-connect socket host port)
+      (operation-in-progress ()
+        (setf (aio-fd-write-handle afd)
+              (add-fd-handler fd :output #'socket-connect-cb)))
       (socket-error (c)
-        (if (= 115 (sb-bsd-sockets::socket-error-errno c)) ; operation in progress
-          (setf (aio-fd-write-handle afd)
-                (add-fd-handler fd :output #'socket-connect-cb))
-          (progn
-            (aio-fd-close afd)
-            (error c)))))
+        (aio-fd-close afd)
+        (error c)))
     (setf (gethash fd *fd-map*) afd)))
 
 
@@ -326,6 +330,7 @@
                (make-instance 'aio-fd
                               :fd client-fd
                               :socket client-socket
+                              :parent afd
                               :read-cb client-read-cb
                               :write-cb client-write-cb
                               :error-cb client-error-cb)))

@@ -1,10 +1,3 @@
-function! TestGetNthVarArg()
-    call assert_equal('default', vlime#GetNthVarArg([], 0, 'default'))
-    call assert_equal('first', vlime#GetNthVarArg(['first', 'second'], 0, 'default'))
-    call assert_equal('second', vlime#GetNthVarArg(['first', 'second'], 1, 'default'))
-    call assert_equal('default', vlime#GetNthVarArg(['first', 'second'], 2, 'default'))
-endfunction
-
 function! TestSimpleSendCB()
     function! s:TestSimpleSendCBDummyCB(conn, msg)
         let b:vlime_test_send_cb_called_with_conn = a:conn
@@ -25,7 +18,7 @@ endfunction
 function! TestConnectFailed()
     let conn = vlime#New()
     try
-        call conn.Connect('127.0.0.1', 65535)
+        call conn.Connect('127.0.0.1', 65535, '', 1)
         call assert_false(v:true, 'Connect call did not fail')
     catch
         call assert_exception('failed to open channel')
@@ -169,6 +162,110 @@ function! TestOnServerEvent()
     unlet b:vlime_test_ping_handler_called
 endfunction
 
+function! TestToRawForm()
+    let cursor_marker = {'package': 'SWANK', 'name': '%CURSOR-MARKER%'}
+    call assert_equal([['cons', '1', '2'], 10, v:true],
+                \ vlime#ToRawForm('(cons 1 2)'))
+    call assert_equal([['cons', '1', '', cursor_marker], 8, v:false],
+                \ vlime#ToRawForm('(cons 1 '))
+    call assert_equal([['cons', '1', ['list', '', cursor_marker]], 14, v:false],
+                \ vlime#ToRawForm('(cons 1 (list '))
+
+    call assert_equal([['cons', '"some string"', '', cursor_marker], 20, v:false],
+                \ vlime#ToRawForm('(cons "some string" '))
+    call assert_equal([['cons', '"some\"\\string"', '', cursor_marker], 24, v:false],
+                \ vlime#ToRawForm('(cons "some\"\\\string" '))
+    call assert_equal([['cons', '', cursor_marker], 19, v:false],
+                \ vlime#ToRawForm('(cons "some string '))
+
+    call assert_equal([['cons', '|some sym|', '', cursor_marker], 17, v:false],
+                \ vlime#ToRawForm('(cons |some sym| '))
+    call assert_equal([['cons', '|some"\\\|sym|', '', cursor_marker], 23, v:false],
+                \ vlime#ToRawForm('(cons |some\"\\\|\sym| '))
+    call assert_equal([['cons', '', cursor_marker], 16, v:false],
+                \ vlime#ToRawForm('(cons |some sym '))
+
+    call assert_equal([['cons', ["1", "2"], '', cursor_marker], 13, v:false],
+                \ vlime#ToRawForm('(cons #(1 2) '))
+    call assert_equal([['cons', ["1", "2", '', cursor_marker]], 12, v:false],
+                \ vlime#ToRawForm('(cons #(1 2 '))
+
+    call assert_equal([['cons', '', cursor_marker], 7, v:false],
+                \ vlime#ToRawForm('(cons #'))
+    call assert_equal([['cons', '#', '', cursor_marker], 8, v:false],
+                \ vlime#ToRawForm('(cons # '))
+    call assert_equal([['cons', '', cursor_marker], 8, v:false],
+                \ vlime#ToRawForm('(cons #\'))
+    call assert_equal([['cons', '#p"some_path"', '"some string"', '', cursor_marker], 34, v:false],
+                \ vlime#ToRawForm('(cons #p"some_path" "some string" '))
+    call assert_equal([['cons', '#\"', '"some string"', '', cursor_marker], 24, v:false],
+                \ vlime#ToRawForm('(cons #\" "some string" '))
+    call assert_equal([['cons', ['-', '1', '2'], '', cursor_marker], 16, v:false],
+                \ vlime#ToRawForm('(cons #.(- 1 2) '))
+
+    call assert_equal([['cons', '''\ ', '1', '', cursor_marker], 12, v:false],
+                \ vlime#ToRawForm('(cons ''\  1 '))
+    call assert_equal([['cons', '''\"', '"some string"', '', cursor_marker], 24, v:false],
+                \ vlime#ToRawForm('(cons ''\" "some string" '))
+
+    call assert_equal([['cons', ['list', '1', '2', '', cursor_marker]], 24, v:false],
+                \ vlime#ToRawForm("(cons ; abc\n  (list 1 2 "))
+endfunction
+
+function! TestMemoize()
+    call assert_equal(9, vlime#Memoize(function('abs', [-9]), -9, 'dummy_cache'))
+    call assert_equal({-9: 9}, b:dummy_cache)
+
+    let b:dummy_cache[-9] = 10
+    call assert_equal(10, vlime#Memoize(function('abs', [-9]), -9, 'dummy_cache'))
+
+    call assert_equal(11, vlime#Memoize(function('abs', [11]), 11, 'dummy_cache'))
+    call assert_equal(2, len(b:dummy_cache))
+
+    call assert_equal(12, vlime#Memoize(function('abs', [12]), 12, 'dummy_cache'))
+    call assert_equal(3, len(b:dummy_cache))
+
+    call assert_equal(13, vlime#Memoize(function('abs', [13]), 13, 'dummy_cache', b:, 1))
+    call assert_equal({13: 13}, b:dummy_cache)
+
+    unlet b:dummy_cache
+endfunction
+
+function! s:DummyChannelCB(chan_obj, msg)
+endfunction
+
+function! TestMakeLocalChannel()
+    let conn = vlime#New()
+    let chan_obj = conn.MakeLocalChannel(v:null, function('s:DummyChannelCB'))
+    call assert_equal(v:t_number, type(chan_obj['id']))
+    call assert_equal(v:t_func, type(chan_obj['callback']))
+    call assert_equal(chan_obj, conn['local_channels'][chan_obj['id']])
+
+    let chan_obj2 = conn.MakeLocalChannel(v:null, function('s:DummyChannelCB'))
+    call assert_notequal(chan_obj['id'], chan_obj2['id'])
+
+    try
+        call conn.MakeLocalChannel(chan_obj['id'], function('s:DummyChannelCB'))
+        call assert_false(v:true, 'MakeLocalChannel did not fail')
+    catch
+        call assert_match('^[^:]\+: channel \d\+ already exists', v:exception)
+    endtry
+endfunction
+
+function! TestMakeRemoteChannel()
+    let conn = vlime#New()
+    let chan_obj = conn.MakeRemoteChannel(1)
+    call assert_equal(1, chan_obj['id'])
+    call assert_equal(chan_obj, conn['remote_channels'][1])
+
+    try
+        let chan_obj2 = conn.MakeRemoteChannel(1)
+        call assert_false(v:true, 'MakeRemoteChannel did not fail')
+    catch
+        call assert_match('^[^:]\+: channel 1 already exists', v:exception)
+    endtry
+endfunction
+
 function! s:SYM(package, name)
     return {'name': a:name, 'package': a:package}
 endfunction
@@ -201,7 +298,30 @@ function! TestMessage(name, expected, reply, ...)
 
     let conn = vlime#New()
     let conn['Send'] = function('s:TestMessageDummySend', [conn, a:reply])
-    let ToCall = function(conn[a:name], a:000)
+
+    " Messages handled by contrib modules
+    let conn['CreateREPL'] = function('vlime#contrib#repl#CreateREPL')
+    let conn['ListenerEval'] = function('vlime#contrib#repl#ListenerEval')
+    let conn['FuzzyCompletions'] = function('vlime#contrib#fuzzy#FuzzyCompletions')
+    let conn['Autodoc'] = function('vlime#contrib#arglists#Autodoc')
+    let conn['InspectPresentation'] = function('vlime#contrib#presentations#InspectPresentation')
+
+    let conn['ClearTraceTree'] = function('vlime#contrib#trace_dialog#ClearTraceTree')
+    let conn['DialogToggleTrace'] = function('vlime#contrib#trace_dialog#DialogToggleTrace')
+    let conn['DialogTrace'] = function('vlime#contrib#trace_dialog#DialogTrace')
+    let conn['DialogUntrace'] = function('vlime#contrib#trace_dialog#DialogUntrace')
+    let conn['DialogUntraceAll'] = function('vlime#contrib#trace_dialog#DialogUntraceAll')
+    let conn['FindTrace'] = function('vlime#contrib#trace_dialog#FindTrace')
+    let conn['FindTracePart'] = function('vlime#contrib#trace_dialog#FindTracePart')
+    let conn['InspectTracePart'] = function('vlime#contrib#trace_dialog#InspectTracePart')
+    let conn['ReportPartialTree'] = function('vlime#contrib#trace_dialog#ReportPartialTree')
+    let conn['ReportSpecs'] = function('vlime#contrib#trace_dialog#ReportSpecs')
+    let conn['ReportTotal'] = function('vlime#contrib#trace_dialog#ReportTotal')
+    let conn['ReportTraceDetail'] = function('vlime#contrib#trace_dialog#ReportTraceDetail')
+
+    let conn['CreateMREPL'] = function('vlime#contrib#mrepl#CreateMREPL')
+
+    let ToCall = function(conn[a:name], a:000, conn)
     let b:vlime_test_dummy_sent_msg = v:null
     call ToCall()
     call assert_equal(a:expected, b:vlime_test_dummy_sent_msg)
@@ -210,7 +330,6 @@ function! TestMessage(name, expected, reply, ...)
 endfunction
 
 let v:errors = []
-call TestGetNthVarArg()
 call TestSimpleSendCB()
 call TestConnectFailed()
 call TestIsConnected()
@@ -223,6 +342,10 @@ call TestWithThread()
 call TestWithPackage()
 call TestEmacsRex()
 call TestOnServerEvent()
+call TestToRawForm()
+call TestMemoize()
+call TestMakeLocalChannel()
+call TestMakeRemoteChannel()
 
 " [msg_name, expected, dummy_reply, args...]
 let b:messages_to_test = [
@@ -248,6 +371,10 @@ let b:messages_to_test = [
                 \ s:ExpectedEmacsRex('SWANK-REPL', 'CREATE-REPL', v:null, s:KW('CODING-SYSTEM'), 'UTF-8'),
                 \ s:OKReturn(['COMMON-LISP-USER', 'CL-USER']),
                 \ 'UTF-8'],
+            \ ['CreateMREPL',
+                \ s:ExpectedEmacsRex('SWANK-MREPL', 'CREATE-MREPL', 1),
+                \ s:OKReturn([1, 2, 'COMMON-LISP-USER', 'CL-USER']),
+                \ 1],
             \ ['ListenerEval',
                 \ s:ExpectedEmacsRex('SWANK-REPL', 'LISTENER-EVAL', 'expression'),
                 \ s:OKReturn(['COMMON-LISP-USER', 'CL-USER']),
@@ -331,6 +458,9 @@ let b:messages_to_test = [
             \ ['InspectorPop',
                 \ s:ExpectedEmacsRex('SWANK', 'INSPECTOR-POP'),
                 \ s:OKReturn(v:null)],
+            \ ['InspectorNext',
+                \ s:ExpectedEmacsRex('SWANK', 'INSPECTOR-NEXT'),
+                \ s:OKReturn(v:null)],
             \ ['InspectCurrentCondition',
                 \ s:ExpectedEmacsRex('SWANK', 'INSPECT-CURRENT-CONDITION'),
                 \ s:OKReturn(v:null)],
@@ -342,6 +472,81 @@ let b:messages_to_test = [
                 \ s:ExpectedEmacsRex('SWANK', 'INSPECT-PRESENTATION', 1, v:true),
                 \ s:OKReturn(v:null),
                 \ 1, v:true],
+            \ ['ClearTraceTree',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'CLEAR-TRACE-TREE'),
+                \ s:OKReturn(v:null)],
+            \ ['DialogToggleTrace',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'DIALOG-TOGGLE-TRACE',
+                    \ [{'package': 'SWANK', 'name': 'FROM-STRING'}, 'dummy']),
+                \ s:OKReturn(v:null),
+                \ 'dummy'],
+            \ ['DialogToggleTrace',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'DIALOG-TOGGLE-TRACE',
+                    \ [{'package': 'SWANK', 'name': 'FROM-STRING'}, '(setf dummy)']),
+                \ s:OKReturn(v:null),
+                \ '(setf dummy)'],
+            \ ['DialogToggleTrace',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'DIALOG-TOGGLE-TRACE',
+                    \ [{'package': 'COMMON-LISP', 'name': 'QUOTE'},
+                        \ {'package': 'COMMON-LISP-USER', 'name': 'DUMMY'}]),
+                \ s:OKReturn(v:null),
+                \ [{'package': 'COMMON-LISP', 'name': 'QUOTE'},
+                    \ {'package': 'COMMON-LISP-USER', 'name': 'DUMMY'}]],
+            \ ['DialogTrace',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'DIALOG-TRACE',
+                    \ [{'package': 'SWANK', 'name': 'FROM-STRING'}, 'dummy']),
+                \ s:OKReturn(v:null),
+                \ 'dummy'],
+            \ ['DialogTrace',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'DIALOG-TRACE',
+                    \ [{'package': 'COMMON-LISP', 'name': 'QUOTE'},
+                        \ {'package': 'COMMON-LISP-USER', 'name': 'DUMMY'}]),
+                \ s:OKReturn(v:null),
+                \ [{'package': 'COMMON-LISP', 'name': 'QUOTE'},
+                    \ {'package': 'COMMON-LISP-USER', 'name': 'DUMMY'}]],
+            \ ['DialogUntrace',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'DIALOG-UNTRACE',
+                    \ [{'package': 'SWANK', 'name': 'FROM-STRING'}, 'dummy']),
+                \ s:OKReturn(v:null),
+                \ 'dummy'],
+            \ ['DialogUntrace',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'DIALOG-UNTRACE',
+                    \ [{'package': 'COMMON-LISP', 'name': 'QUOTE'},
+                        \ {'package': 'COMMON-LISP-USER', 'name': 'DUMMY'}]),
+                \ s:OKReturn(v:null),
+                \ [{'package': 'COMMON-LISP', 'name': 'QUOTE'},
+                    \ {'package': 'COMMON-LISP-USER', 'name': 'DUMMY'}]],
+            \ ['DialogUntraceAll',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'DIALOG-UNTRACE-ALL'),
+                \ s:OKReturn(v:null)],
+            \ ['FindTrace',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'FIND-TRACE', 1),
+                \ s:OKReturn(v:null),
+                \ 1],
+            \ ['FindTracePart',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'FIND-TRACE-PART', 1, 2,
+                    \ {'package': 'KEYWORD', 'name': 'ARG'}),
+                \ s:OKReturn(v:null),
+                \ 1, 2, 'ARG'],
+            \ ['InspectTracePart',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'INSPECT-TRACE-PART', 1, 2,
+                    \ {'package': 'KEYWORD', 'name': 'ARG'}),
+                \ s:OKReturn(v:null),
+                \ 1, 2, 'ARG'],
+            \ ['ReportPartialTree',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'REPORT-PARTIAL-TREE', 1),
+                \ s:OKReturn(v:null),
+                \ 1],
+            \ ['ReportSpecs',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'REPORT-SPECS'),
+                \ s:OKReturn(v:null)],
+            \ ['ReportTotal',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'REPORT-TOTAL'),
+                \ s:OKReturn(v:null)],
+            \ ['ReportTraceDetail',
+                \ s:ExpectedEmacsRex('SWANK-TRACE-DIALOG', 'REPORT-TRACE-DETAIL', 1),
+                \ s:OKReturn(v:null),
+                \ 1],
             \ ['ListThreads',
                 \ s:ExpectedEmacsRex('SWANK', 'LIST-THREADS'),
                 \ s:OKReturn(v:null)],
@@ -377,6 +582,10 @@ let b:messages_to_test = [
                 \ s:ExpectedEmacsRex('SWANK', 'OPERATOR-ARGLIST', 'operator', v:null),
                 \ s:OKReturn(v:null),
                 \ 'operator'],
+            \ ['Autodoc',
+                \ s:ExpectedEmacsRex('SWANK', 'AUTODOC', 'expression'),
+                \ s:OKReturn(v:null),
+                \ 'expression'],
             \ ['SimpleCompletions',
                 \ s:ExpectedEmacsRex('SWANK', 'SIMPLE-COMPLETIONS', 'symbol', v:null),
                 \ s:OKReturn(v:null),

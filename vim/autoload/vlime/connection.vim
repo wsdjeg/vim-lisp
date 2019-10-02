@@ -6,8 +6,8 @@ if !exists('g:vlime_next_conn_id')
     let g:vlime_next_conn_id = 1
 endif
 
-" VlimeNewConnection([name])
-function! VlimeNewConnection(...)
+" vlime#connection#New([name])
+function! vlime#connection#New(...)
     if a:0 > 0
         let conn_name = a:1
     else
@@ -24,37 +24,55 @@ function! VlimeNewConnection(...)
     return conn
 endfunction
 
-function! VlimeCloseConnection(conn)
+function! vlime#connection#Close(conn)
     let conn_id = s:NormalizeConnectionID(a:conn)
     let r_conn = remove(g:vlime_connections, conn_id)
     call r_conn.Close()
 endfunction
 
-function! VlimeRenameConnection(conn, new_name)
+function! vlime#connection#Rename(conn, new_name)
     let conn_id = s:NormalizeConnectionID(a:conn)
     let r_conn = g:vlime_connections[conn_id]
     let r_conn.cb_data['name'] = a:new_name
 endfunction
 
-function! VlimeBuildConnectorCommandFor_ncat(host, port)
-    return ['ncat', a:host, string(a:port)]
+function! vlime#connection#BuildConnectorCommandFor_ncat(host, port, timeout)
+    if type(a:timeout) == type(v:null)
+        return ['ncat', a:host, string(a:port)]
+    else
+        let timeout_sec = a:timeout / 1000.0
+        return ['ncat', '-w', string(timeout_sec), a:host, string(a:port)]
+    endif
 endfunction
 
-function! VlimeBuildConnectorCommand(host, port)
+" vlime#connection#BuildConnectorCommand(host, port[, timeout])
+function! vlime#connection#BuildConnectorCommand(host, port, ...)
     let connector_name = exists('g:vlime_neovim_connector') ?
                 \ g:vlime_neovim_connector : 'ncat'
 
-    try
-        let Builder = function('VlimeBuildConnectorCommandFor_' . connector_name)
-    catch /^Vim\%((\a\+)\)\=:E700/  " Unknown function
-        throw 'VlimeBuildConnectorCommand: connector ' .
+    let user_func_name = 'VlimeBuildConnectorCommandFor_' . connector_name
+    let default_func_name = 'vlime#connection#BuildConnectorCommandFor_' . connector_name
+
+    if exists('*' . user_func_name)
+        let Builder = function(user_func_name)
+    elseif exists('*' . default_func_name)
+        let Builder = function(default_func_name)
+    else
+        throw 'vlime#connection#BuildConnectorCommand: connector ' .
                     \ string(connector_name) . ' not supported'
+    endif
+
+    let timeout = get(a:000, 0, v:null)
+    try
+        let cmd = Builder(a:host, a:port, timeout)
+    catch /^Vim\%((\a\+)\)\=:E118/  " Too many arguments for function
+        let cmd = Builder(a:host, a:port)
     endtry
 
-    return Builder(a:host, a:port)
+    return cmd
 endfunction
 
-function! VlimeSelectConnection(quiet)
+function! vlime#connection#Select(quiet)
     if len(g:vlime_connections) == 0
         if !a:quiet
             call vlime#ui#ErrMsg('Vlime not connected.')
@@ -99,9 +117,9 @@ function! VlimeSelectConnection(quiet)
     endif
 endfunction
 
-" VlimeGetConnection([quiet])
-function! VlimeGetConnection(...) abort
-    let quiet = vlime#GetNthVarArg(a:000, 0, v:false)
+" vlime#connection#Get([quiet])
+function! vlime#connection#Get(...) abort
+    let quiet = get(a:000, 0, v:false)
 
     if !exists('b:vlime_conn') ||
                 \ (type(b:vlime_conn) != type(v:null) &&
@@ -110,7 +128,7 @@ function! VlimeGetConnection(...) abort
         if len(g:vlime_connections) == 1 && !exists('b:vlime_conn')
             let b:vlime_conn = g:vlime_connections[keys(g:vlime_connections)[0]]
         else
-            let conn = VlimeSelectConnection(quiet)
+            let conn = vlime#connection#Select(quiet)
             if type(conn) == type(v:null)
                 if quiet
                     " No connection found. Set this variable to v:null to

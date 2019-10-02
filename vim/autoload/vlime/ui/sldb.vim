@@ -78,13 +78,37 @@ endfunction
 
 " vlime#ui#sldb#OpenFrameSource([edit_cmd])
 function! vlime#ui#sldb#OpenFrameSource(...)
-    let edit_cmd = vlime#GetNthVarArg(a:000, 0, 'hide edit')
+    let edit_cmd = get(a:000, 0, 'hide edit')
     let nth = s:MatchFrame()
     if nth < 0
         let nth = 0
     endif
+
+    let [win_to_go, count_specified] = vlime#ui#ChooseWindowWithCount(v:null)
+    if win_to_go <= 0 && count_specified
+        return
+    endif
+
     call b:vlime_conn.FrameSourceLocation(nth,
-                \ function('s:OpenFrameSourceCB', [edit_cmd, v:count]))
+                \ function('s:OpenFrameSourceCB', [edit_cmd, win_to_go, count_specified]))
+endfunction
+
+" vlime#ui#sldb#FindSource([edit_cmd])
+function! vlime#ui#sldb#FindSource(...)
+    let edit_cmd = get(a:000, 0, 'hide edit')
+    let nth = s:MatchFrame()
+    if nth < 0
+        let nth = 0
+    endif
+
+    let [win_to_go, count_specified] = vlime#ui#ChooseWindowWithCount(v:null)
+    if win_to_go <= 0 && count_specified
+        return
+    endif
+
+    call b:vlime_conn.FrameLocalsAndCatchTags(nth,
+                \ function('s:FindSourceCB',
+                    \ [edit_cmd, win_to_go, count_specified, nth]))
 endfunction
 
 function! vlime#ui#sldb#RestartCurFrame()
@@ -126,19 +150,23 @@ function! vlime#ui#sldb#InspectInCurFrame()
     endif
 
     let thread = b:vlime_conn.GetCurrentThread()
-    call vlime#ui#InputFromMiniBuffer(
+    call vlime#ui#input#FromBuffer(
                 \ b:vlime_conn, 'Inspect in frame (evaluated):',
                 \ v:null,
-                \ 'call vlime#ui#sldb#InspectInCurFrameInputComplete('
-                    \ . nth . ', ' . thread . ') \| bunload!')
+                \ function('s:InspectInCurFrameInputComplete',
+                    \ [nth, thread]))
 endfunction
 
-function! vlime#ui#sldb#InspectInCurFrameInputComplete(frame, thread)
+function! s:InspectInCurFrameInputComplete(frame, thread)
     let content = vlime#ui#CurBufferContent()
-    call b:vlime_conn.WithThread(a:thread,
-                \ function(b:vlime_conn.InspectInFrame,
-                    \ [content, a:frame,
-                        \ {c, r -> c.ui.OnInspect(c, r, v:null, v:null)}]))
+    if len(content) > 0
+        call b:vlime_conn.WithThread(a:thread,
+                    \ function(b:vlime_conn.InspectInFrame,
+                        \ [content, a:frame,
+                            \ {c, r -> c.ui.OnInspect(c, r, v:null, v:null)}]))
+    else
+        call vlime#ui#ErrMsg('Canceled.')
+    endif
 endfunction
 
 function! vlime#ui#sldb#EvalStringInCurFrame()
@@ -148,23 +176,53 @@ function! vlime#ui#sldb#EvalStringInCurFrame()
     endif
 
     let thread = b:vlime_conn.GetCurrentThread()
-    call vlime#ui#InputFromMiniBuffer(
+    call vlime#ui#input#FromBuffer(
                 \ b:vlime_conn, 'Eval in frame:',
                 \ v:null,
-                \ 'call vlime#ui#sldb#EvalStringInCurFrameInputComplete('
-                    \ . nth . ', '
-                    \ . thread
-                    \ . ', "' . escape(b:vlime_conn.GetCurrentPackage()[0], '"')
-                    \ . '") \| bunload!')
+                \ function('s:EvalStringInCurFrameInputComplete',
+                    \ [nth, thread, b:vlime_conn.GetCurrentPackage()[0]]))
 endfunction
 
-function! vlime#ui#sldb#EvalStringInCurFrameInputComplete(frame, thread, package)
+function! s:EvalStringInCurFrameInputComplete(frame, thread, package)
     let content = vlime#ui#CurBufferContent()
-    call b:vlime_conn.WithThread(a:thread,
-                \ function(b:vlime_conn.EvalStringInFrame,
-                    \ [content, a:frame, a:package,
-                        \ {c, r -> c.ui.OnWriteString(c, r . "\n",
-                            \ {'name': 'FRAME-EVAL-RESULT', 'package': 'KEYWORD'})}]))
+    if len(content) > 0
+        call b:vlime_conn.WithThread(a:thread,
+                    \ function(b:vlime_conn.EvalStringInFrame,
+                        \ [content, a:frame, a:package,
+                            \ {c, r -> c.ui.OnWriteString(c, r . "\n",
+                                \ {'name': 'FRAME-EVAL-RESULT', 'package': 'KEYWORD'})}]))
+    else
+        call vlime#ui#ErrMsg('Canceled.')
+    endif
+endfunction
+
+function! vlime#ui#sldb#SendValueInCurFrameToREPL()
+    let nth = s:MatchFrame()
+    if nth < 0
+        let nth = 0
+    endif
+
+    let thread = b:vlime_conn.GetCurrentThread()
+    call vlime#ui#input#FromBuffer(
+                \ b:vlime_conn, 'Eval in frame and send result to REPL:',
+                \ v:null,
+                \ function('s:SendValueInCurFrameToREPLInputComplete',
+                    \ [nth, thread, b:vlime_conn.GetCurrentPackage()[0]]))
+endfunction
+
+function! s:SendValueInCurFrameToREPLInputComplete(frame, thread, package)
+    let content = vlime#ui#CurBufferContent()
+    if len(content) > 0
+        call b:vlime_conn.WithThread(a:thread,
+                    \ function(b:vlime_conn.EvalStringInFrame,
+                        \ ['(setf cl-user::* #.(read-from-string "' . escape(content, '"') . '"))',
+                            \ a:frame, a:package,
+                            \ {c, r ->
+                                \ c.WithThread({'name': 'REPL-THREAD', 'package': 'KEYWORD'},
+                                    \ function(c.ListenerEval, ['cl-user::*']))}]))
+    else
+        call vlime#ui#ErrMsg('Canceled.')
+    endif
 endfunction
 
 function! vlime#ui#sldb#DisassembleCurFrame()
@@ -188,18 +246,22 @@ function! vlime#ui#sldb#ReturnFromCurFrame()
     endif
 
     let thread = b:vlime_conn.GetCurrentThread()
-    call vlime#ui#InputFromMiniBuffer(
+    call vlime#ui#input#FromBuffer(
                 \ b:vlime_conn, 'Return from frame (evaluated):',
                 \ v:null,
-                \ 'call vlime#ui#sldb#ReturnFromCurFrameInputComplete('
-                    \ . nth . ', ' . thread . ') \| bunload!')
+                \ function('s:ReturnFromCurFrameInputComplete',
+                    \ [nth, thread]))
 endfunction
 
-function! vlime#ui#sldb#ReturnFromCurFrameInputComplete(frame, thread)
+function! s:ReturnFromCurFrameInputComplete(frame, thread)
     let content = vlime#ui#CurBufferContent()
-    call b:vlime_conn.WithThread(a:thread,
-                \ function(b:vlime_conn.SLDBReturnFromFrame,
-                    \ [a:frame, content]))
+    if len(content) > 0
+        call b:vlime_conn.WithThread(a:thread,
+                    \ function(b:vlime_conn.SLDBReturnFromFrame,
+                        \ [a:frame, content]))
+    else
+        call vlime#ui#ErrMsg('Canceled.')
+    endif
 endfunction
 
 function! s:FindMaxRestartNameLen(restarts)
@@ -310,22 +372,52 @@ function! s:ShowFrameSourceLocationCB(frame, append, conn, result)
     endif
 endfunction
 
-function! s:OpenFrameSourceCB(edit_cmd, win_nr, conn, result)
-    if a:result[0]['name'] != 'LOCATION'
+function! s:OpenFrameSourceCB(edit_cmd, win_to_go, force_open, conn, result)
+    try
+        let src_loc = vlime#ParseSourceLocation(a:result)
+        let valid_loc = vlime#GetValidSourceLocation(src_loc)
+    catch
+        let valid_loc = []
+    endtry
+
+    if len(valid_loc) > 0 && type(valid_loc[1]) != type(v:null)
+        if a:win_to_go > 0
+            if win_id2win(a:win_to_go) <= 0
+                return
+            endif
+            call win_gotoid(a:win_to_go)
+        endif
+
+        call vlime#ui#ShowSource(a:conn, valid_loc, a:edit_cmd, a:force_open)
+    elseif type(a:result) != type(v:null) && a:result[0]['name'] == 'ERROR'
         call vlime#ui#ErrMsg(a:result[1])
+    else
+        call vlime#ui#ErrMsg('No source available.')
+    endif
+endfunction
+
+function! s:FindSourceCB(edit_cmd, win_to_go, force_open, frame, conn, msg)
+    let locals = a:msg[0]
+    if type(locals) == type(v:null)
+        call vlime#ui#ErrMsg('No local variable.')
         return
     endif
 
-    let force_open = v:false
-    if a:win_nr > 0 && win_getid(a:win_nr) > 0
-        " The user specified a valid window to use explicitly, set the forced flag
-        let force_open = v:true
-        call win_gotoid(win_getid(a:win_nr))
-    elseif a:win_nr > 0
-        call vlime#ui#ErrMsg('Invalid window number: ' . a:win_nr)
-        return
+    let options = map(copy(locals),
+                \ {idx, lc ->
+                    \ string(idx + 1) . '. ' . vlime#PListToDict(lc)['NAME']})
+    echohl Question
+    echom 'Which variable?'
+    echohl None
+    let nth_var = inputlist(options)
+
+    if nth_var > 0
+        call a:conn.FindSourceLocationForEmacs(['SLDB', a:frame, nth_var - 1],
+                    \ function('s:OpenFrameSourceCB',
+                        \ [a:edit_cmd, a:win_to_go, a:force_open]))
+    else
+        call vlime#ui#ErrMsg('Canceled.')
     endif
-    call vlime#ui#JumpToOrOpenFile(a:result[1][1], a:result[2][1], a:edit_cmd, force_open)
 endfunction
 
 function! s:InitSLDBBuf()

@@ -8,7 +8,7 @@
 (in-package #:vlime-usocket)
 
 
-(defun server-listener (socket swank-host swank-port)
+(defun server-listener (socket swank-host swank-port dont-close)
   (vom:info "Server created: ~s" (multiple-value-list (get-local-name socket)))
   (loop
     (handler-case
@@ -17,7 +17,10 @@
           #'(lambda ()
               (vlime-control-thread
                 client-socket swank-host swank-port))
-          :name "Vlime Control Thread"))
+          :name "Vlime Control Thread")
+        (unless dont-close
+          (socket-close socket)
+          (return-from server-listener)))
       (t (c)
          (vom:error "server-listener: ~a" c)
          (socket-close socket)
@@ -132,16 +135,17 @@
 
 (in-package #:vlime)
 
-(defmethod start-server ((backend (eql :usocket)) host port swank-host swank-port)
+(defmethod start-server ((backend (eql :usocket)) host port swank-host swank-port dont-close)
   (vom:config t :info)
-  (let ((server-socket
-          (usocket:socket-listen host port
-                                 :reuse-address t
-                                 :backlog 128
-                                 :element-type '(unsigned-byte 8))))
+  (let* ((server-socket
+           (usocket:socket-listen host port
+                                  :reuse-address t
+                                  :backlog 128
+                                  :element-type '(unsigned-byte 8)))
+         (local-name (multiple-value-list (usocket:get-local-name server-socket))))
     (values
       (swank/backend:spawn
         #'(lambda ()
-            (vlime-usocket::server-listener server-socket swank-host swank-port))
-        :name (format nil "Vlime Server Listener ~a ~a" host port))
-      (multiple-value-list (usocket:get-local-name server-socket)))))
+            (vlime-usocket::server-listener server-socket swank-host swank-port dont-close))
+        :name (format nil "Vlime Server Listener ~a ~a" (first local-name) (second local-name)))
+      local-name)))
