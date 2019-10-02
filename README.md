@@ -5,7 +5,7 @@
 # Dependencies
 
 - Vim 8.0.0312+ with +channel, or Neovim 0.2.0+ with [ncat](https://nmap.org/ncat/)
-- ASDF
+- [ASDF](https://common-lisp.net/project/asdf/)
 - [Quicklisp](https://www.quicklisp.org/beta/#installation)
 - An Internet connection to install other dependencies from Quicklisp
 
